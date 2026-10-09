@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("SECRET_KEY", "test-secret")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-which-is-over-32-bytes")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./storage/test_app.db")
 os.environ.setdefault("AI_PROVIDER", "demo")
 
