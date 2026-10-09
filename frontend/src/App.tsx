@@ -1,4 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
@@ -15,6 +16,7 @@ type Question = {
 }
 
 type Test = { id: number; title: string; duration_minutes: number; total_marks: number; mode: string }
+type ChatMessage = { role: string; content: string }
 
 async function api<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> || {}) }
@@ -41,7 +43,7 @@ function App() {
   const [dashboard, setDashboard] = useState<any>(null)
   const [wrong, setWrong] = useState<Question[]>([])
   const [flashcards, setFlashcards] = useState<any[]>([])
-  const [chat, setChat] = useState<{ role: string; content: string }[]>([])
+  const [chat, setChat] = useState<ChatMessage[]>([])
   const [chatInput, setChatInput] = useState('')
   const [mode, setMode] = useState<{ label: string; demo_mode: boolean }>({ label: 'Loading...', demo_mode: true })
   const [message, setMessage] = useState('')
@@ -53,10 +55,10 @@ function App() {
     const [bookRows, testRows, dash, wrongRows, cardRows, modeRes] = await Promise.all([
       api<Book[]>('/books', token),
       api<Test[]>('/tests', token),
-      api('/analytics/dashboard', token),
+      api<Record<string, any>>('/analytics/dashboard', token),
       api<Question[]>('/revision/wrong-answers', token),
-      api('/flashcards', token),
-      api('/system/mode', token),
+      api<any[]>('/flashcards', token),
+      api<{ label: string; demo_mode: boolean }>('/system/mode', token),
     ])
     setBooks(bookRows)
     setTests(testRows)
@@ -76,7 +78,7 @@ function App() {
     api<Question[]>(`/questions?book_id=${bookId}&page_size=100`, token)
       .then(setQuestions)
       .catch((e) => setMessage(e.message))
-    api('/tutor/history?book_id=' + bookId, token)
+    api<ChatMessage[]>('/tutor/history?book_id=' + bookId, token)
       .then(setChat)
       .catch(() => setChat([]))
   }, [token, bookId])
@@ -159,7 +161,7 @@ function App() {
       body: JSON.stringify({ test_id: testId }),
     })
     setAttemptId(attempt.attempt_id)
-    const detail = await api(`/tests/${testId}`, token)
+    const detail = await api<any>(`/tests/${testId}`, token)
     setActiveTest(detail)
   }
 
@@ -173,7 +175,7 @@ function App() {
 
   const submit = async () => {
     if (!token || !attemptId) return
-    const result = await api(`/attempts/${attemptId}/submit`, token, {
+    const result = await api<{ score: number; max_score: number }>(`/attempts/${attemptId}/submit`, token, {
       method: 'POST',
       body: JSON.stringify({ answers }),
     })
