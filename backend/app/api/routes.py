@@ -1,13 +1,14 @@
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import re
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.deps import get_current_user
 from app.core.security import create_access_token, get_password_hash, verify_password
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models.models import (
     Attempt,
     AttemptResponse,
@@ -61,8 +62,31 @@ def _book_owned(db: Session, user_id: int, book_id: int) -> Book:
     return book
 
 
+def _safe_filename(name: str) -> str:
+    clean = Path(name or "uploaded.pdf").name
+    clean = re.sub(r"[^A-Za-z0-9._ -]+", "_", clean).strip()
+    if not clean.lower().endswith(".pdf"):
+        clean += ".pdf"
+    return clean[:120] or "uploaded.pdf"
+
+
+def _create_processing_job(db: Session, book_id: int) -> ProcessingJob:
+    active = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.book_id == book_id, ProcessingJob.status.in_(["Queued", "Processing"]))
+        .order_by(ProcessingJob.id.desc())
+        .first()
+    )
+    if active:
+        return active
+    job = ProcessingJob(book_id=book_id, status="Queued", message="Queued for processing")
+    db.add(job)
+    db.flush()
+    return job
+
+
 def _process_book(job_id: int, user_id: int, book_id: int) -> None:
-    db = next(get_db())
+    db = SessionLocal()
     try:
         job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
         book = db.query(Book).filter(Book.id == book_id, Book.user_id == user_id).first()
@@ -110,6 +134,22 @@ def _process_book(job_id: int, user_id: int, book_id: int) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _enqueue_or_run_processing(
+    *,
+    background_tasks: BackgroundTasks | None,
+    job: ProcessingJob,
+    user_id: int,
+    book_id: int,
+    run_sync: bool,
+) -> None:
+    if run_sync:
+        _process_book(job.id, user_id, book_id)
+        return
+    if background_tasks is None:
+        raise HTTPException(status_code=500, detail="Background task queue is unavailable")
+    background_tasks.add_task(_process_book, job.id, user_id, book_id)
 
 
 @router.post("/auth/signup", response_model=UserOut)
@@ -165,11 +205,13 @@ def reset_confirm(payload: ResetConfirm, db: Session = Depends(get_db)):
 @router.post("/books/upload", response_model=BookOut)
 async def upload_book(
     background_tasks: BackgroundTasks,
+    sync: bool = Query(default=False),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not file.filename.lower().endswith(".pdf"):
+    safe_name = _safe_filename(file.filename)
+    if not safe_name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are allowed")
     content = await file.read()
     if len(content) > settings.max_upload_mb * 1024 * 1024:
@@ -179,21 +221,26 @@ async def upload_book(
 
     user_dir = settings.storage_dir / "users" / str(current_user.id)
     user_dir.mkdir(parents=True, exist_ok=True)
-    file_path = user_dir / f"{int(datetime.utcnow().timestamp())}_{file.filename}"
+    file_path = user_dir / f"{int(datetime.utcnow().timestamp())}_{safe_name}"
     file_path.write_bytes(content)
 
-    book = Book(user_id=current_user.id, title=file.filename, file_path=str(file_path), status="Uploading")
+    book = Book(user_id=current_user.id, title=safe_name, file_path=str(file_path), status="Uploading")
     db.add(book)
     db.commit()
     db.refresh(book)
 
-    job = ProcessingJob(book_id=book.id, status="Queued")
-    db.add(job)
+    job = _create_processing_job(db, book.id)
     book.status = "Processing"
     db.commit()
     db.refresh(book)
 
-    background_tasks.add_task(_process_book, job.id, current_user.id, book.id)
+    _enqueue_or_run_processing(
+        background_tasks=background_tasks,
+        job=job,
+        user_id=current_user.id,
+        book_id=book.id,
+        run_sync=sync,
+    )
     return book
 
 
@@ -221,14 +268,83 @@ def delete_book(book_id: int, db: Session = Depends(get_db), current_user: User 
 
 
 @router.post("/books/{book_id}/reprocess")
-def reprocess_book(book_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def reprocess_book(
+    book_id: int,
+    background_tasks: BackgroundTasks,
+    sync: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     book = _book_owned(db, current_user.id, book_id)
-    job = ProcessingJob(book_id=book.id, status="Queued")
     book.status = "Processing"
-    db.add(job)
+    job = _create_processing_job(db, book.id)
     db.commit()
-    background_tasks.add_task(_process_book, job.id, current_user.id, book.id)
-    return {"job_id": job.id, "status": "Queued"}
+    _enqueue_or_run_processing(
+        background_tasks=background_tasks,
+        job=job,
+        user_id=current_user.id,
+        book_id=book.id,
+        run_sync=sync,
+    )
+    db.refresh(job)
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/books/{book_id}/processing-jobs")
+def list_processing_jobs(book_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _book_owned(db, current_user.id, book_id)
+    return (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.book_id == book_id)
+        .order_by(ProcessingJob.id.desc())
+        .all()
+    )
+
+
+@router.get("/processing-jobs/{job_id}")
+def get_processing_job(job_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    row = (
+        db.query(ProcessingJob)
+        .join(Book, Book.id == ProcessingJob.book_id)
+        .filter(ProcessingJob.id == job_id, Book.user_id == current_user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    return row
+
+
+@router.post("/processing-jobs/{job_id}/retry")
+def retry_processing_job(
+    job_id: int,
+    background_tasks: BackgroundTasks,
+    sync: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (
+        db.query(ProcessingJob)
+        .join(Book, Book.id == ProcessingJob.book_id)
+        .filter(ProcessingJob.id == job_id, Book.user_id == current_user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    if row.status in {"Queued", "Processing"}:
+        return {"job_id": row.id, "status": row.status}
+    new_job = _create_processing_job(db, row.book_id)
+    book = _book_owned(db, current_user.id, row.book_id)
+    book.status = "Processing"
+    db.commit()
+    _enqueue_or_run_processing(
+        background_tasks=background_tasks,
+        job=new_job,
+        user_id=current_user.id,
+        book_id=row.book_id,
+        run_sync=sync,
+    )
+    db.refresh(new_job)
+    return {"job_id": new_job.id, "status": new_job.status}
 
 
 @router.get("/books/{book_id}/chapters")
@@ -392,6 +508,76 @@ def start_attempt(payload: AttemptStartInput, db: Session = Depends(get_db), cur
     return {"attempt_id": attempt.id, "resumed": False}
 
 
+@router.get("/attempts")
+def list_attempts(
+    book_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(Attempt, Test).join(Test, Test.id == Attempt.test_id).filter(Attempt.user_id == current_user.id)
+    if book_id:
+        query = query.filter(Test.book_id == book_id)
+    rows = query.order_by(Attempt.id.desc()).all()
+    return [
+        {
+            "attempt_id": attempt.id,
+            "test_id": test.id,
+            "test_title": test.title,
+            "book_id": test.book_id,
+            "status": attempt.status,
+            "score": attempt.score,
+            "max_score": attempt.max_score,
+            "started_at": attempt.started_at,
+            "submitted_at": attempt.submitted_at,
+            "duration_minutes": test.duration_minutes,
+        }
+        for attempt, test in rows
+    ]
+
+
+@router.get("/attempts/{attempt_id}")
+def get_attempt(attempt_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    row = (
+        db.query(Attempt, Test)
+        .join(Test, Test.id == Attempt.test_id)
+        .filter(Attempt.id == attempt_id, Attempt.user_id == current_user.id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    attempt, test = row
+    responses = db.query(AttemptResponse).filter(AttemptResponse.attempt_id == attempt.id).all()
+    response_map = {r.question_id: r for r in responses}
+    questions = (
+        db.query(Question)
+        .join(TestQuestion, TestQuestion.question_id == Question.id)
+        .filter(TestQuestion.test_id == test.id)
+        .all()
+    )
+    return {
+        "attempt_id": attempt.id,
+        "test_id": test.id,
+        "test_title": test.title,
+        "book_id": test.book_id,
+        "status": attempt.status,
+        "score": attempt.score,
+        "max_score": attempt.max_score,
+        "mode": test.mode,
+        "duration_minutes": test.duration_minutes,
+        "started_at": attempt.started_at,
+        "submitted_at": attempt.submitted_at,
+        "questions": [
+            {
+                **QuestionOut.model_validate(q).model_dump(),
+                "student_answer": response_map.get(q.id).answer_text if q.id in response_map else None,
+                "obtained_marks": response_map.get(q.id).obtained_marks if q.id in response_map else None,
+                "feedback": response_map.get(q.id).feedback if q.id in response_map else None,
+            }
+            for q in questions
+        ],
+    }
+
+
 @router.post("/attempts/{attempt_id}/autosave")
 def autosave_attempt(attempt_id: int, payload: AutosaveInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     attempt = db.query(Attempt).filter(Attempt.id == attempt_id, Attempt.user_id == current_user.id, Attempt.status == "in_progress").first()
@@ -490,14 +676,45 @@ def dashboard(db: Session = Depends(get_db), current_user: User = Depends(get_cu
         .limit(5)
         .all()
     )
+    attempts = (
+        db.query(Attempt, Test)
+        .join(Test, Test.id == Attempt.test_id)
+        .filter(Attempt.user_id == current_user.id, Attempt.status == "submitted")
+        .order_by(Attempt.submitted_at.desc())
+        .all()
+    )
+    total_minutes = 0
+    streak = 0
+    completed_days = sorted(
+        {
+            a.submitted_at.date()
+            for a, _ in attempts
+            if a.submitted_at
+        },
+        reverse=True,
+    )
+    if completed_days:
+        cursor = datetime.utcnow().date()
+        for day in completed_days:
+            if day == cursor:
+                streak += 1
+                cursor = cursor - timedelta(days=1)
+            elif day < cursor:
+                break
+    for attempt, test in attempts:
+        if attempt.submitted_at and attempt.started_at:
+            elapsed = (attempt.submitted_at - attempt.started_at).total_seconds() / 60
+            total_minutes += int(max(1, min(test.duration_minutes, elapsed)))
+        else:
+            total_minutes += max(1, test.duration_minutes)
     return {
         "books": total_books,
         "chapters": total_chapters,
         "questions": total_questions,
         "tests_completed": tests_completed,
         "average_score": round(float(avg_score), 2),
-        "streak": min(tests_completed, 7),
-        "study_time_minutes": tests_completed * 30,
+        "streak": streak,
+        "study_time_minutes": total_minutes,
         "recent_activity": [
             {
                 "attempt_id": a.id,
