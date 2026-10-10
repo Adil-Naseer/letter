@@ -54,7 +54,7 @@ from app.schemas.schemas import (
     UserOut,
 )
 from app.services.ai_service import ai_provider
-from app.services.pdf_service import chunk_text, detect_chapters, extract_pdf
+from app.services.pdf_service import chunk_text, detect_chapters, extract_pdf, extract_docx
 from app.services.question_service import generate_demo_questions
 from app.services.tutor_service import answer_from_chunks
 
@@ -72,7 +72,8 @@ def _book_owned(db: Session, user_id: int, book_id: int) -> Book:
 def _safe_filename(name: str) -> str:
     clean = Path(name or "uploaded.pdf").name
     clean = re.sub(r"[^A-Za-z0-9._ -]+", "_", clean).strip()
-    if not clean.lower().endswith(".pdf"):
+    # Don't auto-append .pdf if it's .docx
+    if not clean.lower().endswith(".pdf") and not clean.lower().endswith(".docx"):
         clean += ".pdf"
     return clean[:120] or "uploaded.pdf"
 
@@ -103,7 +104,11 @@ def _process_book(job_id: int, user_id: int, book_id: int) -> None:
         book.status = "Processing"
         db.commit()
 
-        pages = extract_pdf(Path(book.file_path))
+        book_path = Path(book.file_path)
+        if book_path.name.lower().endswith(".docx"):
+            pages = extract_docx(book_path)
+        else:
+            pages = extract_pdf(book_path)
         db.query(Chunk).filter(Chunk.book_id == book.id).delete(synchronize_session=False)
         db.query(Chapter).filter(Chapter.book_id == book.id).delete(synchronize_session=False)
         db.commit()
@@ -218,13 +223,20 @@ async def upload_book(
     current_user: User = Depends(get_current_user),
 ):
     safe_name = _safe_filename(file.filename)
-    if not safe_name.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF uploads are allowed")
+    is_pdf = safe_name.lower().endswith(".pdf")
+    is_docx = safe_name.lower().endswith(".docx")
+
+    if not (is_pdf or is_docx):
+        raise HTTPException(status_code=400, detail="Only PDF or DOCX uploads are allowed")
+
     content = await file.read()
     if len(content) > settings.max_upload_mb * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"File exceeds {settings.max_upload_mb}MB limit")
-    if not content.startswith(b"%PDF"):
+
+    if is_pdf and not content.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="Invalid PDF signature")
+    elif is_docx and not content.startswith(b"PK"): # DOCX are ZIP files
+        raise HTTPException(status_code=400, detail="Invalid DOCX signature")
 
     user_dir = settings.storage_dir / "users" / str(current_user.id)
     user_dir.mkdir(parents=True, exist_ok=True)

@@ -1,10 +1,39 @@
 import re
 from pathlib import Path
 from pypdf import PdfReader
+from docx import Document
 
 
 CHAPTER_RE = re.compile(r"^(chapter|unit|lesson)\s+\d+[:\-. ]?.*", re.IGNORECASE)
 
+
+def extract_docx(path: Path) -> list[dict]:
+    document = Document(str(path))
+    pages: list[dict] = []
+
+    # Docx doesn't have inherent page boundaries like PDF, so we'll approximate
+    # pages by paragraphs or characters. Let's group paragraphs into "pages"
+    # of roughly 2000 characters for consistency with chunking logic.
+    current_page_text = []
+    current_char_count = 0
+    page_num = 1
+
+    for para in document.paragraphs:
+        text = para.text.strip()
+        if text:
+            current_page_text.append(text)
+            current_char_count += len(text)
+
+            if current_char_count > 2000:
+                pages.append({"page": page_num, "text": "\n".join(current_page_text)})
+                page_num += 1
+                current_page_text = []
+                current_char_count = 0
+
+    if current_page_text:
+        pages.append({"page": page_num, "text": "\n".join(current_page_text)})
+
+    return pages
 
 def extract_pdf(path: Path) -> list[dict]:
     reader = PdfReader(str(path))

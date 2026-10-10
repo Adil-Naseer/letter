@@ -347,7 +347,7 @@ function App() {
             <h3>Library / Upload Book</h3>
           <input
             type="file"
-            accept="application/pdf"
+            accept="application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             onChange={async (e) => {
               const file = e.target.files?.[0]
               if (!file) return
