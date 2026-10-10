@@ -40,6 +40,7 @@ function App() {
   const [attemptId, setAttemptId] = useState<number | null>(null)
   const [activeTest, setActiveTest] = useState<any>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
+  const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [dashboard, setDashboard] = useState<any>(null)
   const [wrong, setWrong] = useState<Question[]>([])
   const [flashcards, setFlashcards] = useState<any[]>([])
@@ -176,7 +177,15 @@ function App() {
     setAttemptId(attempt.attempt_id)
     const detail = await api<any>(`/tests/${testId}`, token)
     setActiveTest(detail)
+    setTimeLeft(detail.duration_minutes * 60)
   }
+
+  useEffect(() => {
+    if (activeTest && timeLeft !== null && timeLeft > 0) {
+      const timer = setTimeout(() => setTimeLeft(timeLeft - 1), 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [activeTest, timeLeft])
 
   const autosave = async () => {
     if (!token || !attemptId) return
@@ -196,6 +205,7 @@ function App() {
     setAttemptId(null)
     setActiveTest(null)
     setAnswers({})
+    setTimeLeft(null)
     await loadCore()
   }
 
@@ -327,6 +337,31 @@ function App() {
           {activeTest && (
             <div>
               <h4>{activeTest.title}</h4>
+
+              {timeLeft !== null && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span>Time Remaining:</span>
+                    <span style={{
+                      color: (timeLeft / (activeTest.duration_minutes * 60)) > 0.5 ? '#00ff00' :
+                             (timeLeft / (activeTest.duration_minutes * 60)) > 0.2 ? '#ffff00' : '#ff0000',
+                      fontWeight: 'bold'
+                    }}>
+                      {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+                    </span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${(timeLeft / (activeTest.duration_minutes * 60)) * 100}%`,
+                      background: (timeLeft / (activeTest.duration_minutes * 60)) > 0.5 ? '#00ff00' :
+                                  (timeLeft / (activeTest.duration_minutes * 60)) > 0.2 ? '#ffff00' : '#ff0000',
+                      transition: 'width 1s linear, background-color 1s ease'
+                    }} />
+                  </div>
+                </div>
+              )}
+
               {activeTest.questions.map((q: any) => (
                 <div key={q.id} className="card">
                   <p>{q.question_text}</p>
