@@ -3,8 +3,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import re
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+import io
 from app.core.config import get_settings
 from app.core.deps import get_current_user
 from app.core.security import create_access_token, get_password_hash, verify_password
@@ -576,6 +582,63 @@ def get_attempt(attempt_id: int, db: Session = Depends(get_db), current_user: Us
             for q in questions
         ],
     }
+
+
+@router.get("/attempts/{attempt_id}/export")
+def export_attempt_pdf(attempt_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    attempt_data = get_attempt(attempt_id, db, current_user)
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+
+    styles = getSampleStyleSheet()
+    title_style = styles['Heading1']
+    title_style.alignment = TA_CENTER
+    h2 = styles['Heading2']
+    h3 = styles['Heading3']
+    normal = styles['Normal']
+
+    story = []
+
+    import html
+
+    story.append(Paragraph(f"Exam Report: {html.escape(attempt_data['test_title'])}", title_style))
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph(f"<b>Score:</b> {attempt_data['score']} / {attempt_data['max_score']}", h2))
+    story.append(Paragraph(f"<b>Date Submitted:</b> {attempt_data['submitted_at'].strftime('%Y-%m-%d %H:%M') if attempt_data.get('submitted_at') else 'N/A'}", normal))
+    story.append(Spacer(1, 24))
+
+    for i, q in enumerate(attempt_data['questions'], 1):
+        question_block = []
+        question_block.append(Paragraph(f"<b>Q{i} ({q['marks']} marks):</b> {html.escape(q['question_text'])}", h3))
+
+        if q['options']:
+            opts = ", ".join([f"{k}. {html.escape(v)}" for k, v in q['options'].items()])
+            question_block.append(Paragraph(f"<b>Options:</b> {opts}", normal))
+
+        ans = html.escape(q.get('student_answer') or "")
+        question_block.append(Paragraph(f"<b>Your Answer:</b> {ans or '<i>No answer</i>'}", normal))
+
+        if q.get('correct_answer'):
+            question_block.append(Paragraph(f"<b>Correct Answer:</b> {html.escape(q['correct_answer'])}", normal))
+
+        question_block.append(Paragraph(f"<b>Marks Obtained:</b> {q.get('obtained_marks')}", normal))
+
+        if q.get('feedback'):
+            question_block.append(Paragraph(f"<b>Feedback/Explanation:</b> {html.escape(q['feedback'])}", normal))
+
+        question_block.append(Spacer(1, 12))
+        story.append(KeepTogether(question_block))
+
+    doc.build(story)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=exam_report_{attempt_id}.pdf"}
+    )
 
 
 @router.post("/attempts/{attempt_id}/autosave")

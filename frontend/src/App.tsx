@@ -41,6 +41,7 @@ function App() {
   const [activeTest, setActiveTest] = useState<any>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
+  const [reviewAttempt, setReviewAttempt] = useState<any>(null)
   const [dashboard, setDashboard] = useState<any>(null)
   const [wrong, setWrong] = useState<Question[]>([])
   const [flashcards, setFlashcards] = useState<any[]>([])
@@ -221,6 +222,28 @@ function App() {
     setChat((prev) => [...prev, { role: 'assistant', content: `${res.answer}\nRefs: ${res.references.map((r) => `${r.chapter} p.${r.page}`).join(', ')}` }])
   }
 
+  const exportPdf = async (attemptId: number) => {
+    if (!token) return
+    try {
+      const res = await fetch(`${API_BASE}/attempts/${attemptId}/export`, {
+        headers: { Authorization: 'Bearer ' + token },
+      })
+      if (!res.ok) throw new Error(await res.text())
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `exam_report_${attemptId}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      a.remove()
+    } catch (err: any) {
+      setMessage(`PDF Export Failed: ${err.message}`)
+    }
+  }
+
   if (!token) {
     return (
       <main className="container">
@@ -266,6 +289,32 @@ function App() {
                 <div className="card">Avg: {dashboard.average_score}%</div>
               </div>
             )}
+
+        {dashboard && dashboard.recent_activity && dashboard.recent_activity.length > 0 && (
+          <section className="card" style={{marginTop: '1.5rem'}}>
+            <h3>Recent Completed Tests</h3>
+            <div className="scroll">
+              {dashboard.recent_activity.map((a: any) => (
+                <div key={a.attempt_id} className="row" style={{justifyContent: 'space-between', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.4rem'}}>
+                  <span>Score: {a.score}/{a.max_score} | {new Date(a.submitted_at).toLocaleDateString()}</span>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const data = await api<any>(`/attempts/${a.attempt_id}`, token)
+                        setReviewAttempt(data)
+                        setCurrentView('review')
+                      } catch (err: any) {
+                        setMessage(err.message)
+                      }
+                    }}
+                  >
+                    Review
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
           </>
         )}
 
@@ -406,6 +455,33 @@ function App() {
           </button>
           <p>Flashcards: {flashcards.length}</p>
         </section>
+        )}
+
+        {currentView === 'review' && reviewAttempt && (
+          <section className="card">
+            <h3>Review: {reviewAttempt.test_title}</h3>
+            <p>Score: {reviewAttempt.score} / {reviewAttempt.max_score}</p>
+            <div className="scroll" style={{maxHeight: '400px'}}>
+              {reviewAttempt.questions.map((q: any, idx: number) => (
+                <div key={idx} style={{marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)'}}>
+                  <p><b>Q:</b> {q.question_text}</p>
+                  <p><b>Your Answer:</b> <span style={{color: q.obtained_marks > 0 ? '#00ff00' : '#ff0000'}}>{q.student_answer || 'No answer'}</span></p>
+                  {q.correct_answer && <p><b>Correct Answer:</b> {q.correct_answer}</p>}
+                  <p><b>Marks:</b> {q.obtained_marks} / {q.marks}</p>
+                  {q.feedback && <p><b>Feedback:</b> {q.feedback}</p>}
+                </div>
+              ))}
+            </div>
+            <div className="row" style={{marginTop: '1rem'}}>
+              <button onClick={() => {
+                setCurrentView('dashboard');
+                setReviewAttempt(null);
+              }}>Back to Dashboard</button>
+              <button onClick={() => exportPdf(reviewAttempt.attempt_id)} style={{background: 'rgba(0, 243, 255, 0.2)'}}>
+                Export as PDF
+              </button>
+            </div>
+          </section>
         )}
 
         {currentView === 'tutor' && (
