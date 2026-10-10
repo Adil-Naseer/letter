@@ -47,6 +47,7 @@ function App() {
   const [chatInput, setChatInput] = useState('')
   const [mode, setMode] = useState<{ label: string; demo_mode: boolean }>({ label: 'Loading...', demo_mode: true })
   const [message, setMessage] = useState('')
+  const [currentView, setCurrentView] = useState('dashboard')
 
   const selectedBook = useMemo(() => books.find((b) => b.id === bookId), [bookId, books])
 
@@ -126,6 +127,18 @@ function App() {
     const row = await res.json()
     setBooks((prev) => [row, ...prev])
     setBookId(row.id)
+  }
+
+  const deleteBook = async (id: number) => {
+    if (!token) return
+    try {
+      await api(`/books/${id}`, token, { method: 'DELETE' })
+      setBooks((prev) => prev.filter((b) => b.id !== id))
+      if (bookId === id) setBookId(null)
+      setMessage('Book deleted.')
+    } catch (err: any) {
+      setMessage(err.message)
+    }
   }
 
   const generate = async () => {
@@ -223,29 +236,32 @@ function App() {
         <p className="demo">{mode.label}</p>
         <button onClick={() => persistToken(null)}>Logout</button>
         <ul>
-          <li>Dashboard</li>
-          <li>Library</li>
-          <li>Question Bank</li>
-          <li>Create Test</li>
-          <li>Take Test</li>
-          <li>Wrong Answers</li>
-          <li>Flashcards</li>
-          <li>AI Tutor</li>
+          <li className={currentView === 'dashboard' ? 'active-nav' : ''} onClick={() => setCurrentView('dashboard')}>Dashboard</li>
+          <li className={currentView === 'library' ? 'active-nav' : ''} onClick={() => setCurrentView('library')}>Library</li>
+          <li className={currentView === 'questions' ? 'active-nav' : ''} onClick={() => setCurrentView('questions')}>Question Bank</li>
+          <li className={currentView === 'tests' ? 'active-nav' : ''} onClick={() => setCurrentView('tests')}>Create & Take Test</li>
+          <li className={currentView === 'revision' ? 'active-nav' : ''} onClick={() => setCurrentView('revision')}>Wrong Answers & Flashcards</li>
+          <li className={currentView === 'tutor' ? 'active-nav' : ''} onClick={() => setCurrentView('tutor')}>AI Tutor</li>
         </ul>
       </aside>
       <section className="content">
-        <h1>Dashboard</h1>
-        {dashboard && (
-          <div className="grid">
-            <div className="card">Books: {dashboard.books}</div>
-            <div className="card">Questions: {dashboard.questions}</div>
-            <div className="card">Tests: {dashboard.tests_completed}</div>
-            <div className="card">Avg: {dashboard.average_score}%</div>
-          </div>
+        {currentView === 'dashboard' && (
+          <>
+            <h1>Dashboard</h1>
+            {dashboard && (
+              <div className="grid">
+                <div className="card">Books: {dashboard.books}</div>
+                <div className="card">Questions: {dashboard.questions}</div>
+                <div className="card">Tests: {dashboard.tests_completed}</div>
+                <div className="card">Avg: {dashboard.average_score}%</div>
+              </div>
+            )}
+          </>
         )}
 
-        <section className="card">
-          <h3>Library / Upload Book</h3>
+        {currentView === 'library' && (
+          <section className="card">
+            <h3>Library / Upload Book</h3>
           <input
             type="file"
             accept="application/pdf"
@@ -262,15 +278,29 @@ function App() {
           />
           <div className="scroll">
             {books.map((b) => (
-              <button key={b.id} className={bookId === b.id ? 'active' : ''} onClick={() => setBookId(b.id)}>
-                {b.title} — {b.status}
-              </button>
+              <div key={b.id} className="row" style={{justifyContent: 'space-between', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.4rem'}}>
+                <button
+                  className={bookId === b.id ? 'active' : ''}
+                  onClick={() => setBookId(b.id)}
+                  style={{flex: 1, textAlign: 'left', border: 'none', background: 'transparent'}}
+                >
+                  {b.title} — {b.status}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteBook(b.id); }}
+                  style={{background: 'rgba(255, 50, 50, 0.2)', borderColor: 'rgba(255, 50, 50, 0.5)', color: '#ff6b6b'}}
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
         </section>
+        )}
 
-        <section className="card">
-          <h3>Question Bank</h3>
+        {currentView === 'questions' && (
+          <section className="card">
+            <h3>Question Bank</h3>
           <button disabled={!bookId} onClick={generate}>Generate Chapter Questions</button>
           <p>Total: {questions.length}</p>
           <div className="scroll">
@@ -281,9 +311,11 @@ function App() {
             ))}
           </div>
         </section>
+        )}
 
-        <section className="card">
-          <h3>Create & Take Test</h3>
+        {currentView === 'tests' && (
+          <section className="card">
+            <h3>Create & Take Test</h3>
           <button disabled={!questions.length} onClick={createTest}>Create Mixed Test from Current Book</button>
           <div className="scroll">
             {tests.map((t) => (
@@ -318,9 +350,11 @@ function App() {
             </div>
           )}
         </section>
+        )}
 
-        <section className="card">
-          <h3>Wrong Answers & Flashcards</h3>
+        {currentView === 'revision' && (
+          <section className="card">
+            <h3>Wrong Answers & Flashcards</h3>
           <p>Wrong answers tracked: {wrong.length}</p>
           <button
             disabled={!bookId}
@@ -337,9 +371,11 @@ function App() {
           </button>
           <p>Flashcards: {flashcards.length}</p>
         </section>
+        )}
 
-        <section className="card">
-          <h3>Book-Grounded AI Tutor</h3>
+        {currentView === 'tutor' && (
+          <section className="card">
+            <h3>Book-Grounded AI Tutor</h3>
           <div className="chat">
             {chat.map((m, idx) => (
               <p key={idx}><b>{m.role}:</b> {m.content}</p>
@@ -350,8 +386,9 @@ function App() {
             <button disabled={!bookId} onClick={askTutor}>Ask</button>
           </div>
         </section>
+        )}
 
-        <p>{message}</p>
+        <p className="message">{message}</p>
       </section>
     </main>
   )
