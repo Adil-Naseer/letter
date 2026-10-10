@@ -129,6 +129,18 @@ function App() {
     setBookId(row.id)
   }
 
+  const deleteBook = async (id: number) => {
+    if (!token) return
+    try {
+      await api(`/books/${id}`, token, { method: 'DELETE' })
+      setBooks((prev) => prev.filter((b) => b.id !== id))
+      if (bookId === id) setBookId(null)
+      setMessage('Book deleted.')
+    } catch (err: any) {
+      setMessage(err.message)
+    }
+  }
+
   const generate = async () => {
     if (!token || !bookId) return
     await api('/questions/generate', token, {
@@ -266,9 +278,21 @@ function App() {
           />
           <div className="scroll">
             {books.map((b) => (
-              <button key={b.id} className={bookId === b.id ? 'active' : ''} onClick={() => setBookId(b.id)}>
-                {b.title} — {b.status}
-              </button>
+              <div key={b.id} className="row" style={{justifyContent: 'space-between', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.4rem'}}>
+                <button
+                  className={bookId === b.id ? 'active' : ''}
+                  onClick={() => setBookId(b.id)}
+                  style={{flex: 1, textAlign: 'left', border: 'none', background: 'transparent'}}
+                >
+                  {b.title} — {b.status}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteBook(b.id); }}
+                  style={{background: 'rgba(255, 50, 50, 0.2)', borderColor: 'rgba(255, 50, 50, 0.5)', color: '#ff6b6b'}}
+                >
+                  Delete
+                </button>
+              </div>
             ))}
           </div>
         </section>
