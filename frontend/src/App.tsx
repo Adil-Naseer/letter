@@ -466,9 +466,11 @@ function App() {
               {activeTest.questions.map((q: any) => (
                 <div key={q.id} className="card">
                   <p>{q.question_text}</p>
-                  {q.options ? (
+                  {q.type === 'mcq' || q.options ? (
                     <div className="options">
-                      {Object.entries(q.options).map(([key, value]) => (
+                      {Object.entries(q.options || {
+                        'A': 'Option A', 'B': 'Option B', 'C': 'Option C', 'D': 'Option D'
+                      }).map(([key, value]) => (
                         <button key={key} onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: key }))}>
                           {key}. {value as string}
                         </button>
