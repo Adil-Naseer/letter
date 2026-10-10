@@ -86,6 +86,13 @@ class TestCreateInput(BaseModel):
     question_ids: list[int]
 
 
+class SmartGenerateInput(BaseModel):
+    book_id: int
+    title: str = "Smart Review Test"
+    duration_minutes: int = 20
+    question_count: int = 10
+
+
 class TestOut(BaseModel):
     id: int
     title: str

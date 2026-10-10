@@ -44,6 +44,7 @@ from app.schemas.schemas import (
     QuestionOut,
     ResetConfirm,
     ResetRequest,
+    SmartGenerateInput,
     SubmitInput,
     TestCreateInput,
     TestOut,
@@ -463,6 +464,79 @@ def create_test(payload: TestCreateInput, db: Session = Depends(get_db), current
     db.add(test)
     db.flush()
     for q in questions:
+        db.add(TestQuestion(test_id=test.id, question_id=q.id))
+    db.commit()
+    db.refresh(test)
+    return test
+
+
+@router.post("/tests/smart-generate", response_model=TestOut)
+def smart_generate_test(payload: SmartGenerateInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _book_owned(db, current_user.id, payload.book_id)
+
+    # Get all wrong answers for this book
+    wrong_q_ids = [
+        wa.question_id for wa in db.query(WrongAnswer).join(Question).filter(
+            WrongAnswer.user_id == current_user.id, Question.book_id == payload.book_id
+        ).all()
+    ]
+
+    selected_questions = []
+
+    if not wrong_q_ids:
+        # If no analytics data, fallback to picking recent questions
+        selected_questions = db.query(Question).filter(
+            Question.user_id == current_user.id,
+            Question.book_id == payload.book_id
+        ).order_by(Question.id.desc()).limit(payload.question_count).all()
+    else:
+        # Find weakest chapters (top 3 by wrong answer count)
+        weakest = (
+            db.query(Question.chapter_id, func.count(Question.id).label('wrong_count'))
+            .filter(Question.id.in_(wrong_q_ids))
+            .group_by(Question.chapter_id)
+            .order_by(func.count(Question.id).desc())
+            .limit(3)
+            .all()
+        )
+
+        weakest_chapter_ids = [w[0] for w in weakest if w[0] is not None]
+
+        if weakest_chapter_ids:
+            # Pick available questions from the weakest chapters
+            chapter_questions = db.query(Question).filter(
+                Question.user_id == current_user.id,
+                Question.book_id == payload.book_id,
+                Question.chapter_id.in_(weakest_chapter_ids)
+            ).order_by(func.random()).limit(payload.question_count).all()
+            selected_questions.extend(chapter_questions)
+
+        # Fill remaining slots with randomly selected general questions from the book
+        if len(selected_questions) < payload.question_count:
+            existing_ids = [q.id for q in selected_questions]
+            fill_count = payload.question_count - len(selected_questions)
+            fill_questions = db.query(Question).filter(
+                Question.user_id == current_user.id,
+                Question.book_id == payload.book_id,
+                ~Question.id.in_(existing_ids)
+            ).order_by(func.random()).limit(fill_count).all()
+            selected_questions.extend(fill_questions)
+
+    if not selected_questions:
+        raise HTTPException(status_code=400, detail="Not enough questions available to generate a test")
+
+    total_marks = float(sum(q.marks for q in selected_questions))
+    test = Test(
+        user_id=current_user.id,
+        book_id=payload.book_id,
+        title=payload.title,
+        mode="practice",
+        duration_minutes=payload.duration_minutes,
+        total_marks=total_marks,
+    )
+    db.add(test)
+    db.flush()
+    for q in selected_questions:
         db.add(TestQuestion(test_id=test.id, question_id=q.id))
     db.commit()
     db.refresh(test)

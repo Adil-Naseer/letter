@@ -169,6 +169,25 @@ function App() {
     setTests(await api('/tests', token))
   }
 
+  const smartGenerateTest = async () => {
+    if (!token || !bookId) return
+    try {
+      await api('/tests/smart-generate', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          book_id: bookId,
+          title: `${selectedBook?.title || 'Book'} Smart Review Test`,
+          duration_minutes: 20,
+          question_count: 10
+        }),
+      })
+      setTests(await api('/tests', token))
+      setMessage('Smart Review Test generated successfully!')
+    } catch (err: any) {
+      setMessage(`Failed to generate: ${err.message}`)
+    }
+  }
+
   const startTest = async (testId: number) => {
     if (!token) return
     const attempt = await api<{ attempt_id: number }>('/attempts/start', token, {
@@ -375,7 +394,21 @@ function App() {
         {currentView === 'tests' && (
           <section className="card">
             <h3>Create & Take Test</h3>
-          <button disabled={!questions.length} onClick={createTest}>Create Mixed Test from Current Book</button>
+          <div className="row" style={{marginBottom: '1rem'}}>
+            <button disabled={!questions.length} onClick={createTest}>Create Mixed Test from Current Book</button>
+            <button
+              disabled={!bookId}
+              onClick={smartGenerateTest}
+              style={{
+                background: 'linear-gradient(45deg, rgba(181, 55, 242, 0.4), rgba(0, 243, 255, 0.4))',
+                borderColor: 'var(--neon-purple)',
+                color: '#fff',
+                textShadow: '0 0 5px #fff'
+              }}
+            >
+              ✨ Smart Generate (Focus Weakest Topics)
+            </button>
+          </div>
           <div className="scroll">
             {tests.map((t) => (
               <button key={t.id} onClick={() => startTest(t.id)}>
