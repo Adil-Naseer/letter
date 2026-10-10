@@ -41,6 +41,11 @@ function App() {
   const [activeTest, setActiveTest] = useState<any>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
+
+  const [mcqCount, setMcqCount] = useState<number>(10)
+  const [shortCount, setShortCount] = useState<number>(4)
+  const [longCount, setLongCount] = useState<number>(2)
+
   const [reviewAttempt, setReviewAttempt] = useState<any>(null)
   const [dashboard, setDashboard] = useState<any>(null)
   const [wrong, setWrong] = useState<Question[]>([])
@@ -147,7 +152,7 @@ function App() {
     if (!token || !bookId) return
     await api('/questions/generate', token, {
       method: 'POST',
-      body: JSON.stringify({ book_id: bookId, counts: { mcq: 10, short: 4, long: 2 } }),
+      body: JSON.stringify({ book_id: bookId, counts: { mcq: mcqCount, short: shortCount, long: longCount } }),
     })
     const rows = await api<Question[]>(`/questions?book_id=${bookId}&page_size=100`, token)
     setQuestions(rows)
@@ -379,6 +384,20 @@ function App() {
         {currentView === 'questions' && (
           <section className="card">
             <h3>Question Bank</h3>
+          <div className="row" style={{marginBottom: '1rem', gap: '1rem', flexWrap: 'wrap'}}>
+            <label style={{display: 'flex', flexDirection: 'column'}}>
+              <span>MCQs</span>
+              <input type="number" min="0" value={mcqCount} onChange={e => setMcqCount(Number(e.target.value))} style={{width: '80px', marginTop: '0.2rem', background: 'var(--bg-card)', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '0.4rem'}} />
+            </label>
+            <label style={{display: 'flex', flexDirection: 'column'}}>
+              <span>Short Questions</span>
+              <input type="number" min="0" value={shortCount} onChange={e => setShortCount(Number(e.target.value))} style={{width: '80px', marginTop: '0.2rem', background: 'var(--bg-card)', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '0.4rem'}} />
+            </label>
+            <label style={{display: 'flex', flexDirection: 'column'}}>
+              <span>Long Questions</span>
+              <input type="number" min="0" value={longCount} onChange={e => setLongCount(Number(e.target.value))} style={{width: '80px', marginTop: '0.2rem', background: 'var(--bg-card)', color: '#fff', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '0.4rem'}} />
+            </label>
+          </div>
           <button disabled={!bookId} onClick={generate}>Generate Chapter Questions</button>
           <p>Total: {questions.length}</p>
           <div className="scroll">
